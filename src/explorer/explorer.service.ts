@@ -1,10 +1,12 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import BigNumber from 'bignumber.js';
 
 interface ExplorerConfig {
   rpcUrl: string;
   usdtContractAddress: string;
+  decimals: number;
 }
 
 @Injectable()
@@ -17,37 +19,31 @@ export class ExplorerService {
         rpcUrl: this.configService.get<string>('BSC_RPC_URL'),
         usdtContractAddress:
           this.configService.get<string>('BSC_USDT_CONTRACT'),
+        decimals: 18,
       },
       eth: {
         rpcUrl: this.configService.get<string>('ETH_RPC_URL'),
         usdtContractAddress:
           this.configService.get<string>('ETH_USDT_CONTRACT'),
+        decimals: 6,
       },
       polygon: {
         rpcUrl: this.configService.get<string>('POLYGON_RPC_URL'),
         usdtContractAddress: this.configService.get<string>(
           'POLYGON_USDT_CONTRACT',
         ),
+        decimals: 6,
       },
     };
   }
-  async getUSDTAssetsByChain(address: string, chain: string) {
-    const config = this.explorerConfigs[chain];
-    if (!config) {
-      throw new HttpException(
-        `Chain ${chain} is not supported`,
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-    return this.getUSDTBalance(address, config);
-  }
+
   async getUSDTAssets(address: string) {
     const assets = {};
     for (const [network, config] of Object.entries(this.explorerConfigs)) {
       try {
         assets[network] = await this.getUSDTBalance(address, config);
       } catch (error) {
-        this.logger.error(
+        console.error(
           `Failed to fetch USDT assets for network ${network}: ${error.message}`,
         );
         throw new HttpException(
@@ -57,6 +53,27 @@ export class ExplorerService {
       }
     }
     return assets;
+  }
+
+  async getUSDTAssetsByChain(address: string, chain: string) {
+    const config = this.explorerConfigs[chain];
+    if (!config) {
+      throw new HttpException(
+        `Chain ${chain} is not supported`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    try {
+      return await this.getUSDTBalance(address, config);
+    } catch (error) {
+      console.error(
+        `Failed to fetch USDT assets for network ${chain}: ${error.message}`,
+      );
+      throw new HttpException(
+        `Failed to fetch USDT assets for network ${chain}: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   private async getUSDTBalance(address: string, config: ExplorerConfig) {
@@ -81,11 +98,11 @@ export class ExplorerService {
           },
         },
       );
-      const balance = parseInt(response.data.result, 16);
-      const formattedBalance = this.formatUSDTBalance(balance);
+      const balance = new BigNumber(response.data.result);
+      const formattedBalance = this.formatUSDTBalance(balance, config.decimals);
       return formattedBalance;
     } catch (error) {
-      this.logger.error(`Failed to fetch USDT balance: ${error.message}`);
+      console.error(`Failed to fetch USDT balance: ${error.message}`);
       throw new HttpException(
         `Failed to fetch USDT balance: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -93,12 +110,8 @@ export class ExplorerService {
     }
   }
 
-  private formatUSDTBalance(balance: number): string {
-    const formattedBalance = (balance / 1e6).toFixed(2);
-    return formattedBalance;
-  }
-
-  private get logger() {
-    return console;
+  private formatUSDTBalance(balance: BigNumber, decimals: number): string {
+    const divisor = new BigNumber(10).pow(decimals);
+    return balance.dividedBy(divisor).toFixed(2);
   }
 }
